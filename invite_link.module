@@ -1,0 +1,159 @@
+<?php
+
+/**
+ * Session names.
+ */
+define('INVITE_LINK_SESSION', 'invite_link_user');
+
+/**
+ * Implements hook_menu().
+ */
+function invite_link_menu() {
+  $items['invite/code/%'] = array(
+    'page callback' => 'invite_link_page',
+    'access callback' => TRUE,
+    'page arguments' => array(2),
+    'type' => MENU_CALLBACK,
+  );
+  $items['user/%user/invites/link'] = array(
+    'title' => 'Link',
+    'page callback' => 'invite_link_user_overview',
+    'page arguments' => array(1),
+    'access callback' => 'invite_user_access',
+    'access arguments' => array('send invitations', 1),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 15,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_user_insert().
+ */
+function invite_link_user_insert(&$edit, $account, $category) {
+  if (isset($_SESSION[INVITE_LINK_SESSION])) {
+    //check if already invitation
+    $invite = invite_find_invite($account->mail);
+    if (!$invite) {
+      //create invite
+      $invite = invite_create();
+      $invite->email = $account->mail;
+      $invite->inviter = $_SESSION[INVITE_LINK_SESSION];
+      $invite->uid = $invite->inviter->uid;
+      invite_save($invite);
+      //$invite = invite_find_invite($account->mail);
+      $_SESSION[INVITE_SESSION] = $invite->reg_code;
+      if ($invite) {
+        invite_process_invite($invite, $account);
+        unset($_SESSION[INVITE_LINK_SESSION]);
+        module_invoke_all('invite_accept', $invite, $account);
+        // Flag the inviting user, this triggers status notifications and
+        // saves us some queries otherwise.
+        if ($invite->inviter->uid) {
+          user_save($invite->inviter, array('data' => array('invite_accepted' => TRUE)));
+        }
+      }
+    }
+    if (isset($_SESSION)) {
+      unset($_SESSION[INVITE_SESSION]);
+    }
+  }
+}
+
+/**
+ * Implements invite_link_user_overview().
+ * Return the output of the tab with user's invite link
+ */
+function invite_link_user_overview($current_user) {
+  global $user;
+  $links = array();
+  $links[] = array(
+    'data' => url('invite/code/' . $current_user->uid, array('absolute' => TRUE)),
+    'id' => 'invite-code-user-' . $current_user->uid,
+    'class' => array('invite-code-user'),
+  );
+  $links[] = array(
+    'data' => url('invite/code/' . $current_user->name, array('absolute' => TRUE)),
+    'id' => 'invite-code-name-' . $current_user->name,
+    'class' => array('invite-code-name'),
+  );
+  return theme_item_list(array(
+    'items' => $links,
+    'title' => t('Add to any email post or tweet...'),
+    'type' => 'ul',
+    'attributes' => array(),
+  ));
+}
+
+/**
+ * Implements invite_link_page().
+ * Provide the logic for the page on which invitee comes
+ */
+function invite_link_page($user_info) {
+  global $user;
+  if ($user->uid) {
+    drupal_not_found();
+    return;
+  }
+  if (is_numeric($user_info)) {
+    $invite_user = user_load($user_info);
+  }
+  else {
+    $user_info = check_plain($user_info);
+    $invite_user = user_load_by_name($user_info);
+  }
+  if (!$invite_user) {
+    drupal_not_found();
+    return;
+  }
+  $_SESSION[INVITE_LINK_SESSION] = $invite_user;
+  drupal_goto(variable_get('invite_registration_path', 'user/register'));
+  return;
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function invite_link_block_info() {
+  $blocks['invite_link'] = array(
+    'info' => t('Invite link'),
+  );
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function invite_link_block_view($delta = '') {
+  global $user;
+  $block = array();
+  switch ($delta) {
+    case 'invite_link':
+      if (user_access('send invitations') && $user->uid) {
+        $links = array();
+        $links[] = array(
+          'data' => url('invite/code/' . $user->uid, array('absolute' => TRUE)),
+          'id' => 'invite-code-user-' . $user->uid,
+          'class' => array('invite-code-user'),
+        );
+        $links[] = array(
+          'data' => url('invite/code/' . $user->name, array('absolute' => TRUE)),
+          'id' => 'invite-code-name-' . $user->name,
+          'class' => array('invite-code-name'),
+        );
+        $output = theme_item_list(array(
+          'items' => $links,
+          'title' => t('Add to any email post or tweet...'),
+          'type' => 'ul',
+          'attributes' => array(),
+        ));
+
+        $block = array(
+          'subject' => t('Invite Link'),
+          'content' => $output,
+        );
+      }
+      break;
+  }
+  return $block;
+}
